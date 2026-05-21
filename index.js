@@ -43,6 +43,12 @@ async function run() {
       res.send(result)
     })
 
+    app.get('/featured', async (req,res) => {
+      const cursor = ideasCollection.find().limit(3)
+      const result = await cursor.toArray()
+      res.send(result)
+    })
+
   app.get('/ideas/:ideasId', async(req,res) => {
     const {ideasId} = req.params
     const query = {_id: new ObjectId(ideasId)}
