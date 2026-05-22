@@ -1,25 +1,26 @@
 const express = require('express')
 const dotenv = require('dotenv')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
-const cors = require('cors')
+const cors = require('cors');
+const { createRemoteJWKSet } = require('jose-cjs');
+
 dotenv.config()
+
 const app = express()
-app.use(cors())
 const port = process.env.PORT || 5000
 
-app.get('/',(req,res) => {
-    res.send('hello world')
-})
+// ✅ Middleware আগে
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+}))
+app.use(express.json()) // ✅ req.body এর জন্য
 
-app.listen(port, () => {
-    console.log('example app listening on port')
-})
+const uri = process.env.MONGODB_URI;
 
+const jwks = createRemoteJWKSet(
+  new URL(`${process.env.CLIENT_URI}/api/auth/jwks`)
+)
 
-
-const uri = "mongodb+srv://IdeaVault:lcikOsbuwqmmoNpn@cluster0.8qk8fr0.mongodb.net/?appName=Cluster0";
-
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -28,42 +29,73 @@ const client = new MongoClient(uri, {
   }
 });
 
+const logger = (req, res, next) => {
+  console.log(`${req.method} | ${req.url}`)
+  next()
+}
+
+const verifyToken = async (req, res, next) => {
+  const token = req.headers?.authorization?.split(' ')[1]
+  if (!token) return res.status(401).send({ message: 'Unauthorized' })
+  // TODO: jwt.verify(token, process.env.JWT_SECRET, ...)
+  next()
+}
+
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
-    // Send a ping to confirm a successful connection
-    // await client.db("admin").command({ ping: 1 });
+    console.log("✅ Connected to MongoDB");
+
     const db = client.db('IdeaVault')
     const ideasCollection = db.collection('ideas')
 
-    app.get('/ideas', async (req,res) => {
-      const cursor = ideasCollection.find()
-      const result = await cursor.toArray()
-      res.send(result)
+    app.post('/ideas', async(req,res) => {
+      const ideasData = req.body
+      const result = await ideasCollection.insertOne(ideasData)
+      res.json(result)
     })
 
-    app.get('/featured', async (req,res) => {
-      const cursor = ideasCollection.find().limit(3)
-      const result = await cursor.toArray()
-      res.send(result)
+    app.get('/', (req, res) => res.send('hello world'))
+
+    app.get('/ideas', async (req, res) => {
+      try {
+        const result = await ideasCollection.find().toArray()
+        res.send(result)
+      } catch (err) {
+        res.status(500).send({ message: 'Failed to fetch ideas' })
+      }
     })
 
-  app.get('/ideas/:ideasId', async(req,res) => {
-    const {ideasId} = req.params
-    const query = {_id: new ObjectId(ideasId)}
-    const result = await ideasCollection.findOne(query)
-    res.send(result)
-  })
+    app.get('/featured', async (req, res) => {
+      try {
+        const result = await ideasCollection.find().limit(3).toArray()
+        res.send(result)
+      } catch (err) {
+        res.status(500).send({ message: 'Failed to fetch featured' })
+      }
+    })
 
+    app.get('/ideas/:ideasId', logger, verifyToken, async (req, res) => {
+      try {
+        const { ideasId } = req.params
+        const query = { _id: new ObjectId(ideasId) }
+        const result = await ideasCollection.findOne(query)
+        if (!result) return res.status(404).send({ message: 'Not found' })
+        res.send(result)
+      } catch (err) {
+        res.status(500).send({ message: 'Invalid ID or server error' })
+      }
+    })
 
+    // ✅ DB connect হওয়ার পরে listen
+    app.listen(port, () => {
+      console.log(`🚀 Server running on port ${port}`)
+    })
 
-
-
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
-  } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
+  } catch (err) {
+    console.error('MongoDB connection failed:', err)
+    process.exit(1)
   }
 }
-run().catch(console.dir);
+
+run();
